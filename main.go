@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -49,13 +53,32 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// Start the server
+	// Start the server in a goroutine
 	log.Printf("Starting server on %s", cfg.ListenAddr)
 	log.Printf("Gitea: %s/%s/%s (branch: %s)", cfg.GiteaURL, cfg.GiteaOwner, cfg.GiteaRepo, cfg.GiteaBranch)
 
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+
+	// Give outstanding requests 30 seconds to complete
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+
+	log.Println("Server stopped")
 }
 
 // authMiddleware checks for a valid Bearer token.

@@ -24,16 +24,21 @@ func main() {
 	stateHandler := NewStateHandler(giteaClient)
 
 	// Create the main handler with optional auth middleware
-	var handler http.Handler = stateHandler
+	var stateHandlerWithAuth http.Handler = stateHandler
 	if cfg.AuthToken != "" {
-		handler = authMiddleware(cfg.AuthToken, stateHandler)
+		stateHandlerWithAuth = authMiddleware(cfg.AuthToken, stateHandler)
 		log.Printf("Authentication enabled")
 	} else {
 		log.Printf("WARNING: Authentication disabled - AUTH_TOKEN not set")
 	}
 
+	// Set up routes
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/", stateHandlerWithAuth)
+
 	// Add logging middleware
-	handler = loggingMiddleware(handler)
+	handler := loggingMiddleware(mux)
 
 	// Configure server with timeouts
 	server := &http.Server{
@@ -91,4 +96,11 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		log.Printf("%s %s", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleHealth responds to health check requests.
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
 }

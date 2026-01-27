@@ -21,19 +21,26 @@ type LockInfo struct {
 	Path      string `json:"Path"`
 }
 
+// StateStorage defines the interface for state file operations.
+type StateStorage interface {
+	GetFile(path string) ([]byte, string, error)
+	CreateOrUpdateFile(path string, content []byte, message string) error
+}
+
 // StateHandler handles Terraform state HTTP requests.
 // Locks are held in-memory for simplicity (single-instance deployment).
 type StateHandler struct {
-	gitea *GiteaClient
+	storage StateStorage
 
 	mu    sync.RWMutex
 	locks map[string]LockInfo // keyed by state name
 }
 
-func NewStateHandler(gitea *GiteaClient) *StateHandler {
+// NewStateHandler creates a new StateHandler with the given storage backend.
+func NewStateHandler(storage StateStorage) *StateHandler {
 	return &StateHandler{
-		gitea: gitea,
-		locks: make(map[string]LockInfo),
+		storage: storage,
+		locks:   make(map[string]LockInfo),
 	}
 }
 
@@ -73,7 +80,7 @@ func (h *StateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleGet retrieves the current state.
 func (h *StateHandler) handleGet(w http.ResponseWriter, r *http.Request, name string) {
-	content, _, err := h.gitea.GetFile(statePath(name))
+	content, _, err := h.storage.GetFile(statePath(name))
 	if err != nil {
 		log.Printf("Error getting state %s: %v", name, err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -120,7 +127,7 @@ func (h *StateHandler) handlePost(w http.ResponseWriter, r *http.Request, name s
 	}
 
 	// Save the state
-	err = h.gitea.CreateOrUpdateFile(statePath(name), body, fmt.Sprintf("Update state: %s", name))
+	err = h.storage.CreateOrUpdateFile(statePath(name), body, fmt.Sprintf("Update state: %s", name))
 	if err != nil {
 		log.Printf("Error saving state %s: %v", name, err)
 		http.Error(w, "failed to save state", http.StatusInternalServerError)

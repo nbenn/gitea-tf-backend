@@ -5,22 +5,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 )
 
-// MockGiteaClient implements file operations in memory for testing.
-type MockGiteaClient struct {
+// MockStorage implements StateStorage for testing.
+type MockStorage struct {
 	files map[string][]byte
 }
 
-func NewMockGiteaClient() *MockGiteaClient {
-	return &MockGiteaClient{
+func NewMockStorage() *MockStorage {
+	return &MockStorage{
 		files: make(map[string][]byte),
 	}
 }
 
-func (m *MockGiteaClient) GetFile(path string) ([]byte, string, error) {
+func (m *MockStorage) GetFile(path string) ([]byte, string, error) {
 	content, exists := m.files[path]
 	if !exists {
 		return nil, "", nil
@@ -28,167 +27,49 @@ func (m *MockGiteaClient) GetFile(path string) ([]byte, string, error) {
 	return content, "sha-" + path, nil
 }
 
-func (m *MockGiteaClient) FileExists(path string) (bool, string, error) {
-	content, sha, err := m.GetFile(path)
-	if err != nil {
-		return false, "", err
-	}
-	return content != nil, sha, nil
-}
-
-func (m *MockGiteaClient) CreateFile(path string, content []byte, message string) error {
+func (m *MockStorage) CreateOrUpdateFile(path string, content []byte, _ string) error {
 	m.files[path] = content
 	return nil
 }
 
-func (m *MockGiteaClient) UpdateFile(path string, content []byte, sha string, message string) error {
-	m.files[path] = content
-	return nil
+// Test helpers
+
+func newTestHandler() (*StateHandler, *MockStorage) {
+	mock := NewMockStorage()
+	handler := NewStateHandler(mock)
+	return handler, mock
 }
 
-func (m *MockGiteaClient) DeleteFile(path string, sha string, message string) error {
-	delete(m.files, path)
-	return nil
-}
+// Tests for StateHandler
 
-func (m *MockGiteaClient) CreateOrUpdateFile(path string, content []byte, message string) error {
-	m.files[path] = content
-	return nil
-}
+func TestServeHTTP_EmptyStateName(t *testing.T) {
+	handler, _ := newTestHandler()
 
-// GiteaFileClient interface for dependency injection
-type GiteaFileClient interface {
-	GetFile(path string) ([]byte, string, error)
-	FileExists(path string) (bool, string, error)
-	CreateFile(path string, content []byte, message string) error
-	UpdateFile(path string, content []byte, sha string, message string) error
-	DeleteFile(path string, sha string, message string) error
-	CreateOrUpdateFile(path string, content []byte, message string) error
-}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
 
-// TestableStateHandler is like StateHandler but accepts a GiteaFileClient interface
-// for testing with mocks.
-type TestableStateHandler struct {
-	client GiteaFileClient
-	mu     sync.RWMutex
-	locks  map[string]LockInfo
-}
+	handler.ServeHTTP(w, req)
 
-func NewTestableStateHandler(client GiteaFileClient) *TestableStateHandler {
-	return &TestableStateHandler{
-		client: client,
-		locks:  make(map[string]LockInfo),
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
 	}
 }
 
-func (h *TestableStateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	name := extractStateName(r.URL.Path)
-	if name == "" {
-		http.Error(w, "state name required", http.StatusBadRequest)
-		return
-	}
+func TestServeHTTP_MethodNotAllowed(t *testing.T) {
+	handler, _ := newTestHandler()
 
-	switch r.Method {
-	case http.MethodGet:
-		content, _, err := h.client.GetFile(statePath(name))
-		if err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-		if content == nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(content)
+	req := httptest.NewRequest(http.MethodDelete, "/myproject", nil)
+	w := httptest.NewRecorder()
 
-	case http.MethodPost:
-		h.mu.RLock()
-		existingLock, locked := h.locks[name]
-		h.mu.RUnlock()
+	handler.ServeHTTP(w, req)
 
-		if locked {
-			lockID := r.Header.Get("Lock-Id")
-			if lockID != existingLock.ID {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusLocked)
-				_ = json.NewEncoder(w).Encode(existingLock)
-				return
-			}
-		}
-
-		body := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(body)
-		if err := h.client.CreateOrUpdateFile(statePath(name), body, "Update state"); err != nil {
-			http.Error(w, "failed to save state", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-
-	case "LOCK":
-		var lockInfo LockInfo
-		if err := json.NewDecoder(r.Body).Decode(&lockInfo); err != nil {
-			http.Error(w, "invalid lock info", http.StatusBadRequest)
-			return
-		}
-
-		h.mu.Lock()
-		defer h.mu.Unlock()
-
-		if existing, locked := h.locks[name]; locked {
-			if existing.ID == lockInfo.ID {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_ = json.NewEncoder(w).Encode(existing)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusLocked)
-			_ = json.NewEncoder(w).Encode(existing)
-			return
-		}
-
-		h.locks[name] = lockInfo
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(lockInfo)
-
-	case "UNLOCK":
-		var unlockInfo LockInfo
-		if err := json.NewDecoder(r.Body).Decode(&unlockInfo); err != nil {
-			http.Error(w, "invalid lock info", http.StatusBadRequest)
-			return
-		}
-
-		h.mu.Lock()
-		defer h.mu.Unlock()
-
-		existing, locked := h.locks[name]
-		if !locked {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		if unlockInfo.ID != "" && unlockInfo.ID != existing.ID {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(existing)
-			return
-		}
-
-		delete(h.locks, name)
-		w.WriteHeader(http.StatusOK)
-
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status 405, got %d", w.Code)
 	}
 }
-
-// Tests
 
 func TestGetState_NotFound(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
 	req := httptest.NewRequest(http.MethodGet, "/myproject", nil)
 	w := httptest.NewRecorder()
@@ -201,8 +82,7 @@ func TestGetState_NotFound(t *testing.T) {
 }
 
 func TestGetState_Found(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, mock := newTestHandler()
 
 	stateData := []byte(`{"version":4,"terraform_version":"1.0.0"}`)
 	mock.files["states/myproject/terraform.tfstate"] = stateData
@@ -219,15 +99,17 @@ func TestGetState_Found(t *testing.T) {
 	if !bytes.Equal(w.Body.Bytes(), stateData) {
 		t.Errorf("expected body %s, got %s", stateData, w.Body.Bytes())
 	}
+
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %s", ct)
+	}
 }
 
 func TestPostState_NoLock(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, mock := newTestHandler()
 
 	stateData := []byte(`{"version":4,"terraform_version":"1.0.0"}`)
 	req := httptest.NewRequest(http.MethodPost, "/myproject", bytes.NewReader(stateData))
-	req.ContentLength = int64(len(stateData))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -243,15 +125,13 @@ func TestPostState_NoLock(t *testing.T) {
 }
 
 func TestPostState_WithMatchingLock(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
-	// Create a lock in-memory
+	// Create a lock
 	handler.locks["myproject"] = LockInfo{ID: "lock-123", Operation: "apply"}
 
 	stateData := []byte(`{"version":4}`)
 	req := httptest.NewRequest(http.MethodPost, "/myproject", bytes.NewReader(stateData))
-	req.ContentLength = int64(len(stateData))
 	req.Header.Set("Lock-Id", "lock-123")
 	w := httptest.NewRecorder()
 
@@ -262,16 +142,31 @@ func TestPostState_WithMatchingLock(t *testing.T) {
 	}
 }
 
-func TestPostState_WithWrongLock(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+func TestPostState_WithMatchingLockQueryParam(t *testing.T) {
+	handler, _ := newTestHandler()
 
-	// Create a lock in-memory
+	// Create a lock
+	handler.locks["myproject"] = LockInfo{ID: "lock-123", Operation: "apply"}
+
+	stateData := []byte(`{"version":4}`)
+	req := httptest.NewRequest(http.MethodPost, "/myproject?ID=lock-123", bytes.NewReader(stateData))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+}
+
+func TestPostState_WithWrongLock(t *testing.T) {
+	handler, _ := newTestHandler()
+
+	// Create a lock
 	handler.locks["myproject"] = LockInfo{ID: "lock-123", Operation: "apply"}
 
 	stateData := []byte(`{"version":4}`)
 	req := httptest.NewRequest(http.MethodPost, "/myproject", bytes.NewReader(stateData))
-	req.ContentLength = int64(len(stateData))
 	req.Header.Set("Lock-Id", "wrong-lock")
 	w := httptest.NewRecorder()
 
@@ -283,8 +178,7 @@ func TestPostState_WithWrongLock(t *testing.T) {
 }
 
 func TestLock_Success(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
 	lockInfo := LockInfo{ID: "lock-123", Operation: "apply", Who: "user@host"}
 	lockJSON, _ := json.Marshal(lockInfo)
@@ -298,17 +192,32 @@ func TestLock_Success(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 
-	// Verify lock was created in-memory
 	if _, exists := handler.locks["myproject"]; !exists {
 		t.Error("lock was not created")
+	}
+
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %s", ct)
+	}
+}
+
+func TestLock_InvalidJSON(t *testing.T) {
+	handler, _ := newTestHandler()
+
+	req := httptest.NewRequest("LOCK", "/myproject", bytes.NewReader([]byte("not json")))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
 	}
 }
 
 func TestLock_AlreadyLocked(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
-	// Create existing lock in-memory
+	// Create existing lock
 	handler.locks["myproject"] = LockInfo{ID: "existing-lock", Operation: "apply"}
 
 	// Try to acquire new lock
@@ -332,8 +241,7 @@ func TestLock_AlreadyLocked(t *testing.T) {
 }
 
 func TestLock_Idempotent(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
 	// Create existing lock with same ID
 	handler.locks["myproject"] = LockInfo{ID: "lock-123", Operation: "apply"}
@@ -353,10 +261,9 @@ func TestLock_Idempotent(t *testing.T) {
 }
 
 func TestUnlock_Success(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
-	// Create existing lock in-memory
+	// Create existing lock
 	handler.locks["myproject"] = LockInfo{ID: "lock-123", Operation: "apply"}
 
 	lockInfo := LockInfo{ID: "lock-123"}
@@ -371,17 +278,28 @@ func TestUnlock_Success(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 
-	// Verify lock was deleted
 	if _, exists := handler.locks["myproject"]; exists {
 		t.Error("lock was not deleted")
 	}
 }
 
-func TestUnlock_WrongID(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+func TestUnlock_InvalidJSON(t *testing.T) {
+	handler, _ := newTestHandler()
 
-	// Create existing lock in-memory
+	req := httptest.NewRequest("UNLOCK", "/myproject", bytes.NewReader([]byte("not json")))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
+	}
+}
+
+func TestUnlock_WrongID(t *testing.T) {
+	handler, _ := newTestHandler()
+
+	// Create existing lock
 	handler.locks["myproject"] = LockInfo{ID: "lock-123", Operation: "apply"}
 
 	// Try to unlock with wrong ID
@@ -397,15 +315,13 @@ func TestUnlock_WrongID(t *testing.T) {
 		t.Errorf("expected status 409, got %d", w.Code)
 	}
 
-	// Lock should still exist
 	if _, exists := handler.locks["myproject"]; !exists {
 		t.Error("lock should not be deleted")
 	}
 }
 
 func TestUnlock_NoLock(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
 	unlockInfo := LockInfo{ID: "any-id"}
 	unlockJSON, _ := json.Marshal(unlockInfo)
@@ -421,10 +337,9 @@ func TestUnlock_NoLock(t *testing.T) {
 }
 
 func TestUnlock_ForceUnlock(t *testing.T) {
-	mock := NewMockGiteaClient()
-	handler := NewTestableStateHandler(mock)
+	handler, _ := newTestHandler()
 
-	// Create existing lock in-memory
+	// Create existing lock
 	handler.locks["myproject"] = LockInfo{ID: "lock-123", Operation: "apply"}
 
 	// Force unlock with empty ID
@@ -440,17 +355,27 @@ func TestUnlock_ForceUnlock(t *testing.T) {
 		t.Errorf("expected status 200 for force unlock, got %d", w.Code)
 	}
 
-	// Lock should be deleted
 	if _, exists := handler.locks["myproject"]; exists {
 		t.Error("lock should be deleted on force unlock")
 	}
 }
 
+// Tests for utility functions
+
 func TestStatePath(t *testing.T) {
-	path := statePath("myproject")
-	expected := "states/myproject/terraform.tfstate"
-	if path != expected {
-		t.Errorf("expected %s, got %s", expected, path)
+	tests := []struct {
+		name     string
+		expected string
+	}{
+		{"myproject", "states/myproject/terraform.tfstate"},
+		{"org/project", "states/org/project/terraform.tfstate"},
+	}
+
+	for _, tt := range tests {
+		result := statePath(tt.name)
+		if result != tt.expected {
+			t.Errorf("statePath(%q) = %q, expected %q", tt.name, result, tt.expected)
+		}
 	}
 }
 
@@ -463,6 +388,8 @@ func TestExtractStateName(t *testing.T) {
 		{"/myproject/", "myproject"},
 		{"myproject", "myproject"},
 		{"/org/project", "org/project"},
+		{"/", ""},
+		{"", ""},
 	}
 
 	for _, tt := range tests {

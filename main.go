@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -34,11 +35,20 @@ func main() {
 	// Add logging middleware
 	handler = loggingMiddleware(handler)
 
+	// Configure server with timeouts
+	server := &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second, // Higher to allow for slow Gitea responses
+		IdleTimeout:  120 * time.Second,
+	}
+
 	// Start the server
 	log.Printf("Starting server on %s", cfg.ListenAddr)
 	log.Printf("Gitea: %s/%s/%s (branch: %s)", cfg.GiteaURL, cfg.GiteaOwner, cfg.GiteaRepo, cfg.GiteaBranch)
 
-	if err := http.ListenAndServe(cfg.ListenAddr, handler); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

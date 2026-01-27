@@ -3,7 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
+
+// Default maximum request body size (50 MB).
+const DefaultMaxBodySize = 50 << 20
 
 type Config struct {
 	GiteaURL    string
@@ -13,6 +17,7 @@ type Config struct {
 	GiteaBranch string
 	ListenAddr  string
 	AuthToken   string // Optional - if empty, no auth required
+	MaxBodySize int64  // Maximum request body size in bytes
 }
 
 func LoadConfig() (*Config, error) {
@@ -32,6 +37,19 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8080"
+	}
+
+	// Parse max body size (in MB)
+	cfg.MaxBodySize = DefaultMaxBodySize
+	if maxBodyMB := os.Getenv("MAX_BODY_SIZE_MB"); maxBodyMB != "" {
+		mb, err := strconv.ParseInt(maxBodyMB, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("MAX_BODY_SIZE_MB must be a valid integer: %w", err)
+		}
+		if mb <= 0 {
+			return nil, fmt.Errorf("MAX_BODY_SIZE_MB must be positive")
+		}
+		cfg.MaxBodySize = mb << 20 // Convert MB to bytes
 	}
 
 	// Validate required fields

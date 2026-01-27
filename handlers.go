@@ -30,17 +30,19 @@ type StateStorage interface {
 // StateHandler handles Terraform state HTTP requests.
 // Locks are held in-memory for simplicity (single-instance deployment).
 type StateHandler struct {
-	storage StateStorage
+	storage     StateStorage
+	maxBodySize int64
 
 	mu    sync.RWMutex
 	locks map[string]LockInfo // keyed by state name
 }
 
 // NewStateHandler creates a new StateHandler with the given storage backend.
-func NewStateHandler(storage StateStorage) *StateHandler {
+func NewStateHandler(storage StateStorage, maxBodySize int64) *StateHandler {
 	return &StateHandler{
-		storage: storage,
-		locks:   make(map[string]LockInfo),
+		storage:     storage,
+		maxBodySize: maxBodySize,
+		locks:       make(map[string]LockInfo),
 	}
 }
 
@@ -118,7 +120,8 @@ func (h *StateHandler) handlePost(w http.ResponseWriter, r *http.Request, name s
 		}
 	}
 
-	// Read the state body
+	// Read the state body with size limit
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodySize)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Error reading body for %s: %v", name, err)
@@ -139,6 +142,7 @@ func (h *StateHandler) handlePost(w http.ResponseWriter, r *http.Request, name s
 
 // handleLock acquires a lock for the state.
 func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name string) {
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodySize)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Error reading lock body for %s: %v", name, err)
@@ -173,6 +177,7 @@ func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name s
 
 	// Acquire the lock
 	h.locks[name] = lockInfo
+	IncrementActiveLocks()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -181,6 +186,7 @@ func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name s
 
 // handleUnlock releases a lock for the state.
 func (h *StateHandler) handleUnlock(w http.ResponseWriter, r *http.Request, name string) {
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodySize)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Error reading unlock body for %s: %v", name, err)
@@ -215,6 +221,7 @@ func (h *StateHandler) handleUnlock(w http.ResponseWriter, r *http.Request, name
 
 	// Release the lock
 	delete(h.locks, name)
+	DecrementActiveLocks()
 
 	w.WriteHeader(http.StatusOK)
 }

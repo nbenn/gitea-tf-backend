@@ -67,6 +67,53 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.AuthToken != "" {
 		t.Errorf("expected empty AuthToken, got %q", cfg.AuthToken)
 	}
+	if cfg.MaxBodySize != DefaultMaxBodySize {
+		t.Errorf("expected default MaxBodySize %d, got %d", DefaultMaxBodySize, cfg.MaxBodySize)
+	}
+}
+
+func TestLoadConfig_CustomMaxBodySize(t *testing.T) {
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("MAX_BODY_SIZE_MB", "100")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := int64(100 << 20) // 100 MB
+	if cfg.MaxBodySize != expected {
+		t.Errorf("expected MaxBodySize %d, got %d", expected, cfg.MaxBodySize)
+	}
+}
+
+func TestLoadConfig_InvalidMaxBodySize(t *testing.T) {
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("MAX_BODY_SIZE_MB", "not-a-number")
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected error for invalid MAX_BODY_SIZE_MB")
+	}
+}
+
+func TestLoadConfig_NegativeMaxBodySize(t *testing.T) {
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("MAX_BODY_SIZE_MB", "-5")
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected error for negative MAX_BODY_SIZE_MB")
+	}
 }
 
 func TestLoadConfig_MissingGiteaURL(t *testing.T) {

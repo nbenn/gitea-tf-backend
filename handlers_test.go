@@ -36,7 +36,7 @@ func (m *MockStorage) CreateOrUpdateFile(path string, content []byte, _ string) 
 
 func newTestHandler() (*StateHandler, *MockStorage) {
 	mock := NewMockStorage()
-	handler := NewStateHandler(mock)
+	handler := NewStateHandler(mock, DefaultMaxBodySize)
 	return handler, mock
 }
 

@@ -25,6 +25,7 @@ All configuration is via environment variables:
 | `GITEA_BRANCH` | No | `main` | Branch to store state files |
 | `LISTEN_ADDR` | No | `:8080` | Address to listen on |
 | `AUTH_TOKEN` | No | - | Token for client authentication (recommended) |
+| `MAX_BODY_SIZE_MB` | No | `50` | Maximum request body size in megabytes |
 
 ## Usage
 
@@ -80,11 +81,12 @@ State files are stored in the repository with this structure:
 ```
 states/
 └── {project-name}/
-    ├── terraform.tfstate    # The actual state file
-    └── .lock                # Lock file (present when locked)
+    └── terraform.tfstate
 ```
 
 Each state update creates a commit, giving you full history of all state changes.
+
+**Note:** Locks are held in-memory on the server, not in the repository. This keeps the Git history clean and avoids lock file pollution. The tradeoff is that locks are lost if the server restarts (which is generally fine since Terraform will re-acquire them).
 
 ## Building
 
@@ -104,6 +106,27 @@ docker build -t gitea-tf-backend .
 | `POST` | `/{name}` | Save state |
 | `LOCK` | `/{name}` | Acquire lock |
 | `UNLOCK` | `/{name}` | Release lock |
+| `GET` | `/health` | Health check (returns `{"status":"ok"}`) |
+| `GET` | `/metrics` | Prometheus metrics |
+
+## Monitoring
+
+The `/metrics` endpoint exposes Prometheus metrics:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `http_requests_total` | Counter | Total HTTP requests (labels: `method`, `status`) |
+| `http_request_duration_seconds` | Histogram | Request latency (labels: `method`) |
+| `tfstate_locks_active` | Gauge | Number of currently held state locks |
+
+Example Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: 'gitea-tf-backend'
+    static_configs:
+      - targets: ['tf-state.example.com:8080']
+```
 
 ## Security Notes
 
@@ -111,6 +134,7 @@ docker build -t gitea-tf-backend .
 - Use HTTPS (put behind a reverse proxy like Traefik/nginx)
 - The Gitea token needs write access to the state repository
 - Consider using a dedicated repository for state files
+- The `/health` and `/metrics` endpoints do not require authentication
 
 ## License
 

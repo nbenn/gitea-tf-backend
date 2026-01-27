@@ -26,7 +26,7 @@ func main() {
 	}
 
 	// Create state handler
-	stateHandler := NewStateHandler(giteaClient)
+	stateHandler := NewStateHandler(giteaClient, cfg.MaxBodySize)
 
 	// Create the main handler with optional auth middleware
 	var stateHandlerWithAuth http.Handler = stateHandler
@@ -40,10 +40,11 @@ func main() {
 	// Set up routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/metrics", MetricsHandler())
 	mux.Handle("/", stateHandlerWithAuth)
 
-	// Add logging middleware
-	handler := loggingMiddleware(mux)
+	// Add middleware (metrics wraps logging wraps routes)
+	handler := metricsMiddleware(loggingMiddleware(mux))
 
 	// Configure server with timeouts
 	server := &http.Server{

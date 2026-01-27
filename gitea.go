@@ -2,10 +2,15 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 
 	"code.gitea.io/sdk/gitea"
 )
+
+// ErrFileAlreadyExists is returned when attempting to create a file that already exists.
+// This enables callers to handle conflict scenarios (e.g., concurrent lock creation).
+var ErrFileAlreadyExists = errors.New("file already exists")
 
 type GiteaClient struct {
 	client *gitea.Client
@@ -62,8 +67,9 @@ func (g *GiteaClient) FileExists(path string) (bool, string, error) {
 }
 
 // CreateFile creates a new file in the repository.
+// Returns ErrFileAlreadyExists if the file already exists (HTTP 422 from Gitea).
 func (g *GiteaClient) CreateFile(path string, content []byte, message string) error {
-	_, _, err := g.client.CreateFile(g.owner, g.repo, path, gitea.CreateFileOptions{
+	_, resp, err := g.client.CreateFile(g.owner, g.repo, path, gitea.CreateFileOptions{
 		FileOptions: gitea.FileOptions{
 			Message:    message,
 			BranchName: g.branch,
@@ -71,6 +77,10 @@ func (g *GiteaClient) CreateFile(path string, content []byte, message string) er
 		Content: base64.StdEncoding.EncodeToString(content),
 	})
 	if err != nil {
+		// Gitea returns 422 Unprocessable Entity when file already exists
+		if resp != nil && resp.StatusCode == 422 {
+			return ErrFileAlreadyExists
+		}
 		return fmt.Errorf("failed to create file %s: %w", path, err)
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // LockInfo represents the Terraform lock information structure.
@@ -20,22 +21,25 @@ type LockInfo struct {
 	Path      string `json:"Path"`
 }
 
+// StateHandler handles Terraform state HTTP requests.
+// Locks are held in-memory for simplicity (single-instance deployment).
 type StateHandler struct {
 	gitea *GiteaClient
+
+	mu    sync.RWMutex
+	locks map[string]LockInfo // keyed by state name
 }
 
 func NewStateHandler(gitea *GiteaClient) *StateHandler {
-	return &StateHandler{gitea: gitea}
+	return &StateHandler{
+		gitea: gitea,
+		locks: make(map[string]LockInfo),
+	}
 }
 
 // statePath returns the path to the state file for a given state name.
 func statePath(name string) string {
 	return fmt.Sprintf("states/%s/terraform.tfstate", name)
-}
-
-// lockPath returns the path to the lock file for a given state name.
-func lockPath(name string) string {
-	return fmt.Sprintf("states/%s/.lock", name)
 }
 
 // extractStateName extracts the state name from the URL path.
@@ -88,26 +92,15 @@ func (h *StateHandler) handleGet(w http.ResponseWriter, r *http.Request, name st
 // handlePost saves the state.
 func (h *StateHandler) handlePost(w http.ResponseWriter, r *http.Request, name string) {
 	// Check if there's a lock and validate the lock ID
-	lockContent, _, err := h.gitea.GetFile(lockPath(name))
-	if err != nil {
-		log.Printf("Error checking lock for %s: %v", name, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
+	h.mu.RLock()
+	existingLock, locked := h.locks[name]
+	h.mu.RUnlock()
 
-	// If locked, verify the lock ID matches
-	if lockContent != nil {
+	if locked {
 		lockID := r.Header.Get("Lock-Id")
 		if lockID == "" {
 			// Terraform may also send it as a query param
 			lockID = r.URL.Query().Get("ID")
-		}
-
-		var existingLock LockInfo
-		if err := json.Unmarshal(lockContent, &existingLock); err != nil {
-			log.Printf("Error parsing lock for %s: %v", name, err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
 		}
 
 		if lockID != existingLock.ID {
@@ -139,7 +132,6 @@ func (h *StateHandler) handlePost(w http.ResponseWriter, r *http.Request, name s
 
 // handleLock acquires a lock for the state.
 func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name string) {
-	// Read the lock info from the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Error reading lock body for %s: %v", name, err)
@@ -154,69 +146,26 @@ func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
-	// Check if already locked
-	existingContent, sha, err := h.gitea.GetFile(lockPath(name))
-	if err != nil {
-		log.Printf("Error checking existing lock for %s: %v", name, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-	if existingContent != nil {
-		// Already locked - return the existing lock info
-		var existingLock LockInfo
-		if err := json.Unmarshal(existingContent, &existingLock); err != nil {
-			log.Printf("Error parsing existing lock for %s: %v", name, err)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		// If it's the same lock ID, consider it a re-lock (idempotent)
+	if existingLock, locked := h.locks[name]; locked {
 		if existingLock.ID == lockInfo.ID {
+			// Same lock ID - idempotent success
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(existingLock)
 			return
 		}
-
+		// Different lock - return 423 Locked
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusLocked)
 		json.NewEncoder(w).Encode(existingLock)
 		return
 	}
 
-	// Create the lock file
-	lockJSON, err := json.Marshal(lockInfo)
-	if err != nil {
-		log.Printf("Error marshaling lock for %s: %v", name, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Use CreateFile directly to avoid race conditions
-	// If someone else creates the lock between our check and create, this will fail
-	if sha == "" {
-		err = h.gitea.CreateFile(lockPath(name), lockJSON, fmt.Sprintf("Lock state: %s", name))
-	} else {
-		// This shouldn't happen since we checked existingContent == nil, but handle it
-		err = h.gitea.UpdateFile(lockPath(name), lockJSON, sha, fmt.Sprintf("Lock state: %s", name))
-	}
-
-	if err != nil {
-		// Could be a race condition - check if lock exists now
-		existingContent, _, _ := h.gitea.GetFile(lockPath(name))
-		if existingContent != nil {
-			var existingLock LockInfo
-			json.Unmarshal(existingContent, &existingLock)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusLocked)
-			json.NewEncoder(w).Encode(existingLock)
-			return
-		}
-		log.Printf("Error creating lock for %s: %v", name, err)
-		http.Error(w, "failed to create lock", http.StatusInternalServerError)
-		return
-	}
+	// Acquire the lock
+	h.locks[name] = lockInfo
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -225,7 +174,6 @@ func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name s
 
 // handleUnlock releases a lock for the state.
 func (h *StateHandler) handleUnlock(w http.ResponseWriter, r *http.Request, name string) {
-	// Read the lock info from the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Error reading unlock body for %s: %v", name, err)
@@ -240,24 +188,13 @@ func (h *StateHandler) handleUnlock(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
-	// Get the existing lock
-	existingContent, sha, err := h.gitea.GetFile(lockPath(name))
-	if err != nil {
-		log.Printf("Error checking lock for unlock %s: %v", name, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
-	if existingContent == nil {
+	existingLock, locked := h.locks[name]
+	if !locked {
 		// No lock exists - success (idempotent)
 		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	var existingLock LockInfo
-	if err := json.Unmarshal(existingContent, &existingLock); err != nil {
-		log.Printf("Error parsing existing lock for unlock %s: %v", name, err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -269,13 +206,8 @@ func (h *StateHandler) handleUnlock(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
-	// Delete the lock file
-	err = h.gitea.DeleteFile(lockPath(name), sha, fmt.Sprintf("Unlock state: %s", name))
-	if err != nil {
-		log.Printf("Error deleting lock for %s: %v", name, err)
-		http.Error(w, "failed to delete lock", http.StatusInternalServerError)
-		return
-	}
+	// Release the lock
+	delete(h.locks, name)
 
 	w.WriteHeader(http.StatusOK)
 }

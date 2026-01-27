@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"os"
@@ -103,7 +104,7 @@ func authMiddleware(token string, next http.Handler) http.Handler {
 			}
 		}
 
-		if providedToken != token {
+		if subtle.ConstantTimeCompare([]byte(providedToken), []byte(token)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="terraform-state"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

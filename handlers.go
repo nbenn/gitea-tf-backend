@@ -86,7 +86,7 @@ func (h *StateHandler) handleGet(w http.ResponseWriter, r *http.Request, name st
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(content)
+	_, _ = w.Write(content)
 }
 
 // handlePost saves the state.
@@ -106,7 +106,7 @@ func (h *StateHandler) handlePost(w http.ResponseWriter, r *http.Request, name s
 		if lockID != existingLock.ID {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusLocked)
-			json.NewEncoder(w).Encode(existingLock)
+			_ = json.NewEncoder(w).Encode(existingLock)
 			return
 		}
 	}
@@ -154,13 +154,13 @@ func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name s
 			// Same lock ID - idempotent success
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(existingLock)
+			_ = json.NewEncoder(w).Encode(existingLock)
 			return
 		}
 		// Different lock - return 423 Locked
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusLocked)
-		json.NewEncoder(w).Encode(existingLock)
+		_ = json.NewEncoder(w).Encode(existingLock)
 		return
 	}
 
@@ -169,7 +169,7 @@ func (h *StateHandler) handleLock(w http.ResponseWriter, r *http.Request, name s
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(lockInfo)
+	_ = json.NewEncoder(w).Encode(lockInfo)
 }
 
 // handleUnlock releases a lock for the state.
@@ -202,7 +202,7 @@ func (h *StateHandler) handleUnlock(w http.ResponseWriter, r *http.Request, name
 	if unlockInfo.ID != "" && unlockInfo.ID != existingLock.ID {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(existingLock)
+		_ = json.NewEncoder(w).Encode(existingLock)
 		return
 	}
 

@@ -100,7 +100,7 @@ func (h *TestableStateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(content)
+		_, _ = w.Write(content)
 
 	case http.MethodPost:
 		h.mu.RLock()
@@ -112,13 +112,13 @@ func (h *TestableStateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			if lockID != existingLock.ID {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusLocked)
-				json.NewEncoder(w).Encode(existingLock)
+				_ = json.NewEncoder(w).Encode(existingLock)
 				return
 			}
 		}
 
 		body := make([]byte, r.ContentLength)
-		r.Body.Read(body)
+		_, _ = r.Body.Read(body)
 		if err := h.client.CreateOrUpdateFile(statePath(name), body, "Update state"); err != nil {
 			http.Error(w, "failed to save state", http.StatusInternalServerError)
 			return
@@ -139,19 +139,19 @@ func (h *TestableStateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 			if existing.ID == lockInfo.ID {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
-				json.NewEncoder(w).Encode(existing)
+				_ = json.NewEncoder(w).Encode(existing)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusLocked)
-			json.NewEncoder(w).Encode(existing)
+			_ = json.NewEncoder(w).Encode(existing)
 			return
 		}
 
 		h.locks[name] = lockInfo
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(lockInfo)
+		_ = json.NewEncoder(w).Encode(lockInfo)
 
 	case "UNLOCK":
 		var unlockInfo LockInfo
@@ -172,7 +172,7 @@ func (h *TestableStateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		if unlockInfo.ID != "" && unlockInfo.ID != existing.ID {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(existing)
+			_ = json.NewEncoder(w).Encode(existing)
 			return
 		}
 
@@ -325,7 +325,7 @@ func TestLock_AlreadyLocked(t *testing.T) {
 	}
 
 	var returnedLock LockInfo
-	json.NewDecoder(w.Body).Decode(&returnedLock)
+	_ = json.NewDecoder(w.Body).Decode(&returnedLock)
 	if returnedLock.ID != "existing-lock" {
 		t.Errorf("expected existing lock ID, got %s", returnedLock.ID)
 	}

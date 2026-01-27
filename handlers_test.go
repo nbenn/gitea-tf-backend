@@ -118,9 +118,11 @@ func TestPostState_NoLock(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 
+	// State should be prettified when saved
 	saved := mock.files["states/myproject/terraform.tfstate"]
-	if !bytes.Equal(saved, stateData) {
-		t.Errorf("state not saved correctly")
+	expectedPretty := "{\n  \"version\": 4,\n  \"terraform_version\": \"1.0.0\"\n}"
+	if string(saved) != expectedPretty {
+		t.Errorf("state not saved correctly, got: %s", saved)
 	}
 }
 

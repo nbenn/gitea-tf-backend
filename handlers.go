@@ -129,8 +129,19 @@ func (h *StateHandler) handlePost(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 
+	// Prettify the JSON for better readability in git diffs
+	var prettyBody []byte
+	var rawState json.RawMessage
+	if err := json.Unmarshal(body, &rawState); err == nil {
+		prettyBody, _ = json.MarshalIndent(rawState, "", "  ")
+	}
+	if prettyBody == nil {
+		// Fall back to original if prettification fails
+		prettyBody = body
+	}
+
 	// Save the state
-	err = h.storage.CreateOrUpdateFile(statePath(name), body, fmt.Sprintf("Update state: %s", name))
+	err = h.storage.CreateOrUpdateFile(statePath(name), prettyBody, fmt.Sprintf("Update state: %s", name))
 	if err != nil {
 		log.Printf("Error saving state %s: %v", name, err)
 		http.Error(w, "failed to save state", http.StatusInternalServerError)

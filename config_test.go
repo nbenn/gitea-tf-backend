@@ -1,35 +1,18 @@
 package main
 
 import (
-	"os"
 	"testing"
 )
 
 func TestLoadConfig_Success(t *testing.T) {
-	// Save current env and restore after test
-	envVars := []string{"GITEA_URL", "GITEA_TOKEN", "GITEA_OWNER", "GITEA_REPO", "GITEA_BRANCH", "LISTEN_ADDR", "AUTH_TOKEN"}
-	saved := make(map[string]string)
-	for _, key := range envVars {
-		saved[key] = os.Getenv(key)
-	}
-	defer func() {
-		for key, val := range saved {
-			if val == "" {
-				os.Unsetenv(key)
-			} else {
-				os.Setenv(key, val)
-			}
-		}
-	}()
-
-	// Set required env vars
-	os.Setenv("GITEA_URL", "https://gitea.example.com")
-	os.Setenv("GITEA_TOKEN", "test-token")
-	os.Setenv("GITEA_OWNER", "testowner")
-	os.Setenv("GITEA_REPO", "testrepo")
-	os.Setenv("GITEA_BRANCH", "develop")
-	os.Setenv("LISTEN_ADDR", ":9090")
-	os.Setenv("AUTH_TOKEN", "auth-secret")
+	// t.Setenv automatically restores the original value after the test
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("GITEA_BRANCH", "develop")
+	t.Setenv("LISTEN_ADDR", ":9090")
+	t.Setenv("AUTH_TOKEN", "auth-secret")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -60,30 +43,14 @@ func TestLoadConfig_Success(t *testing.T) {
 }
 
 func TestLoadConfig_Defaults(t *testing.T) {
-	// Save current env and restore after test
-	envVars := []string{"GITEA_URL", "GITEA_TOKEN", "GITEA_OWNER", "GITEA_REPO", "GITEA_BRANCH", "LISTEN_ADDR", "AUTH_TOKEN"}
-	saved := make(map[string]string)
-	for _, key := range envVars {
-		saved[key] = os.Getenv(key)
-	}
-	defer func() {
-		for key, val := range saved {
-			if val == "" {
-				os.Unsetenv(key)
-			} else {
-				os.Setenv(key, val)
-			}
-		}
-	}()
-
-	// Set only required env vars, leave optional ones unset
-	os.Setenv("GITEA_URL", "https://gitea.example.com")
-	os.Setenv("GITEA_TOKEN", "test-token")
-	os.Setenv("GITEA_OWNER", "testowner")
-	os.Setenv("GITEA_REPO", "testrepo")
-	os.Unsetenv("GITEA_BRANCH")
-	os.Unsetenv("LISTEN_ADDR")
-	os.Unsetenv("AUTH_TOKEN")
+	// Set only required env vars, leave optional ones empty
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("GITEA_BRANCH", "")
+	t.Setenv("LISTEN_ADDR", "")
+	t.Setenv("AUTH_TOKEN", "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -103,26 +70,10 @@ func TestLoadConfig_Defaults(t *testing.T) {
 }
 
 func TestLoadConfig_MissingGiteaURL(t *testing.T) {
-	// Save current env and restore after test
-	envVars := []string{"GITEA_URL", "GITEA_TOKEN", "GITEA_OWNER", "GITEA_REPO"}
-	saved := make(map[string]string)
-	for _, key := range envVars {
-		saved[key] = os.Getenv(key)
-	}
-	defer func() {
-		for key, val := range saved {
-			if val == "" {
-				os.Unsetenv(key)
-			} else {
-				os.Setenv(key, val)
-			}
-		}
-	}()
-
-	os.Unsetenv("GITEA_URL")
-	os.Setenv("GITEA_TOKEN", "test-token")
-	os.Setenv("GITEA_OWNER", "testowner")
-	os.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("GITEA_URL", "")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "testrepo")
 
 	_, err := LoadConfig()
 	if err == nil {
@@ -134,26 +85,10 @@ func TestLoadConfig_MissingGiteaURL(t *testing.T) {
 }
 
 func TestLoadConfig_MissingGiteaToken(t *testing.T) {
-	// Save current env and restore after test
-	envVars := []string{"GITEA_URL", "GITEA_TOKEN", "GITEA_OWNER", "GITEA_REPO"}
-	saved := make(map[string]string)
-	for _, key := range envVars {
-		saved[key] = os.Getenv(key)
-	}
-	defer func() {
-		for key, val := range saved {
-			if val == "" {
-				os.Unsetenv(key)
-			} else {
-				os.Setenv(key, val)
-			}
-		}
-	}()
-
-	os.Setenv("GITEA_URL", "https://gitea.example.com")
-	os.Unsetenv("GITEA_TOKEN")
-	os.Setenv("GITEA_OWNER", "testowner")
-	os.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "testrepo")
 
 	_, err := LoadConfig()
 	if err == nil {
@@ -165,26 +100,10 @@ func TestLoadConfig_MissingGiteaToken(t *testing.T) {
 }
 
 func TestLoadConfig_MissingGiteaOwner(t *testing.T) {
-	// Save current env and restore after test
-	envVars := []string{"GITEA_URL", "GITEA_TOKEN", "GITEA_OWNER", "GITEA_REPO"}
-	saved := make(map[string]string)
-	for _, key := range envVars {
-		saved[key] = os.Getenv(key)
-	}
-	defer func() {
-		for key, val := range saved {
-			if val == "" {
-				os.Unsetenv(key)
-			} else {
-				os.Setenv(key, val)
-			}
-		}
-	}()
-
-	os.Setenv("GITEA_URL", "https://gitea.example.com")
-	os.Setenv("GITEA_TOKEN", "test-token")
-	os.Unsetenv("GITEA_OWNER")
-	os.Setenv("GITEA_REPO", "testrepo")
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "")
+	t.Setenv("GITEA_REPO", "testrepo")
 
 	_, err := LoadConfig()
 	if err == nil {
@@ -196,26 +115,10 @@ func TestLoadConfig_MissingGiteaOwner(t *testing.T) {
 }
 
 func TestLoadConfig_MissingGiteaRepo(t *testing.T) {
-	// Save current env and restore after test
-	envVars := []string{"GITEA_URL", "GITEA_TOKEN", "GITEA_OWNER", "GITEA_REPO"}
-	saved := make(map[string]string)
-	for _, key := range envVars {
-		saved[key] = os.Getenv(key)
-	}
-	defer func() {
-		for key, val := range saved {
-			if val == "" {
-				os.Unsetenv(key)
-			} else {
-				os.Setenv(key, val)
-			}
-		}
-	}()
-
-	os.Setenv("GITEA_URL", "https://gitea.example.com")
-	os.Setenv("GITEA_TOKEN", "test-token")
-	os.Setenv("GITEA_OWNER", "testowner")
-	os.Unsetenv("GITEA_REPO")
+	t.Setenv("GITEA_URL", "https://gitea.example.com")
+	t.Setenv("GITEA_TOKEN", "test-token")
+	t.Setenv("GITEA_OWNER", "testowner")
+	t.Setenv("GITEA_REPO", "")
 
 	_, err := LoadConfig()
 	if err == nil {

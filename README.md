@@ -1,5 +1,8 @@
 # gitea-tf-backend
 
+[![ci](https://github.com/nbenn/gitea-tf-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/nbenn/gitea-tf-backend/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/nbenn/gitea-tf-backend/graph/badge.svg?token=18V0XE7EOC)](https://codecov.io/gh/nbenn/gitea-tf-backend)
+
 A lightweight HTTP backend for Terraform/OpenTofu that stores state in a Gitea repository.
 
 State files are stored as commits in your Gitea repo, giving you full version history and the ability to use standard Git tools for inspection and recovery.
